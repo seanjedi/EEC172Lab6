@@ -87,11 +87,11 @@
 #define SL_SSL_CLIENT  "/cert/client"
 
 //NEED TO UPDATE THIS FOR IT TO WORK!
-#define DATE                3    /* Current Date */
+#define DATE                4    /* Current Date */
 #define MONTH               6     /* Month 1-12 */
 #define YEAR                2018  /* Current year */
-#define HOUR                20    /* Time - hours */
-#define MINUTE              20    /* Time - minutes */
+#define HOUR                12    /* Time - hours */
+#define MINUTE              35    /* Time - minutes */
 #define SECOND              0     /* Time - seconds */
 
 //RESTful API
@@ -170,6 +170,7 @@ static volatile unsigned int timer_recordings[128];
 static volatile char current_player;
 static volatile char current_board[9];
 static volatile char winning_player;
+static volatile int selected_space;
 static char DATA1[300];
 static char DATA2[300];
 long mainLRetVal;
@@ -197,12 +198,16 @@ static void TimersInit(void);
 static void TicTacToeInit(void);
 static void DrawPlayer(unsigned int pos);
 static void DrawNumber(unsigned int pos);
+static void SelectSpace(unsigned int pos);
+static void DeselectSpace(unsigned int pos);
 static void ClearSpace(unsigned int pos);
 static void RisingEdgeHandler(void);
 static void FallingEdgeHandler(void);
 static void StartTimerHandler(void);
 static void OnTimerEndHandler(void);
 static void OnGetEndHandler(void);
+static void SW2Handler(void);
+static void SW3Handler(void);
 //static void UARTReceiveHandler(void);
 static unsigned char DetermineNumber(int input);
 static void SendToAWS(void);
@@ -221,6 +226,8 @@ typedef struct PinSetting {
 
 static PinSetting receiver_rising = { .port = GPIOA0_BASE, .pin = 0x1};
 static PinSetting receiver_falling = { .port = GPIOA3_BASE, .pin = 0x40};
+static PinSetting sw2 = { .port = GPIOA2_BASE, .pin = 0x40};
+static PinSetting sw3 = { .port = GPIOA1_BASE, .pin = 0x20};
 //*****************************************************************************
 //                 PIN SETUP -- End
 //*****************************************************************************
@@ -290,6 +297,8 @@ static void OLEDInit(void)
     {
         DrawNumber(i);
     }
+
+    SelectSpace(1);
 }
 
 static void GPIOInit(void)
@@ -297,17 +306,27 @@ static void GPIOInit(void)
     // Register the interrupt handlers
     MAP_GPIOIntRegister(receiver_rising.port, RisingEdgeHandler);
     MAP_GPIOIntRegister(receiver_falling.port, StartTimerHandler); //Initially set to start timer on trigger
+    MAP_GPIOIntRegister(sw2.port, SW2Handler);
+    MAP_GPIOIntRegister(sw3.port, SW3Handler);
 
     // Configure edge interrupts
     MAP_GPIOIntTypeSet(receiver_rising.port, receiver_rising.pin, GPIO_RISING_EDGE);
     MAP_GPIOIntTypeSet(receiver_falling.port, receiver_falling.pin, GPIO_FALLING_EDGE);
+    MAP_GPIOIntTypeSet(sw2.port, sw2.pin, GPIO_RISING_EDGE);
+    MAP_GPIOIntTypeSet(sw3.port, sw3.pin, GPIO_RISING_EDGE);
 
     //Clear interrupts
     MAP_GPIOIntClear(receiver_rising.port, receiver_rising.pin);
     MAP_GPIOIntClear(receiver_falling.port, receiver_falling.pin);
+    MAP_GPIOIntClear(sw2.port, sw2.pin);
+    MAP_GPIOIntClear(sw3.port, sw3.pin);
 
     //Enable falling edge interrupt only
     MAP_GPIOIntEnable(receiver_falling.port, receiver_falling.pin);
+
+    //Enable both switches
+    MAP_GPIOIntEnable(sw2.port, sw2.pin);
+    MAP_GPIOIntEnable(sw3.port, sw3.pin);
 }
 
 //Function to initialize the Timers
@@ -349,6 +368,7 @@ static void TicTacToeInit(void)
 {
     current_player = PLAYER_X;
     winning_player = EMPTY_SPACE;
+    selected_space = 1;
     int i;
     for(i = 0; i < 9; ++i)
     {
@@ -362,6 +382,24 @@ static void TicTacToeInit(void)
 //*****************************************************************************
 //                 HANDLERS -- Start
 //*****************************************************************************
+static void SW2Handler(void)
+{
+    MAP_GPIOIntClear(sw2.port, sw2.pin);
+    UART_PRINT("SW2!\n\r");
+    DeselectSpace(selected_space);
+    ++selected_space;
+    if(selected_space == 10)
+        selected_space = 1;
+    SelectSpace(selected_space);
+}
+
+static void SW3Handler(void)
+{
+    MAP_GPIOIntClear(sw3.port, sw3.pin);
+    UART_PRINT("SW3!\n\r");
+    SendToAWS();
+}
+
 //This handler gets triggered when we have a rising edge, and records the current timer for the
 //the message we received from the IR remote, then increases the edge count we got
 static void RisingEdgeHandler(void)
@@ -585,6 +623,20 @@ static void DrawNumber(unsigned int pos)
     int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 7;
     int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 7;
     drawChar(x, y, '0'+pos, NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+}
+
+static void SelectSpace(unsigned int pos)
+{
+    int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 1;
+    int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 1;
+    drawRect(x, y, SQUARE_SIZE - 1, SQUARE_SIZE - 1, NUMBER_COLOR);
+}
+
+static void DeselectSpace(unsigned int pos)
+{
+    int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 1;
+    int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 1;
+    drawRect(x, y, SQUARE_SIZE - 1, SQUARE_SIZE - 1, BG_COLOR);
 }
 
 static void ClearSpace(unsigned int pos)
@@ -1277,10 +1329,18 @@ int connectToAccessPoint() {
 //!
 //*****************************************************************************
 
+static void DummyFunc(void)
+{
+    SendToAWS();
+    UART_PRINT("*****POST DONE*****\n\r");
+    http_get(mainLRetVal);
+    UART_PRINT("*****GET DONE*****\n\r");
+}
+
 void main() {
     //What the hell am I doing
-    char *addrToEdit = (char*)0xE000E008;
-    *addrToEdit = (*addrToEdit | 2);
+//    char *addrToEdit = (char*)0xE000E008;
+//    *addrToEdit = (*addrToEdit | 2);
 
     //Set up global variables
     edge_count = 0;
@@ -1322,7 +1382,11 @@ void main() {
     //Update shadow to clean board
     //SendToAWS();
     //http_get(mainLRetVal);
-    //UART_PRINT("*****DONE*****\n\r");
+    UART_PRINT("*****DONE*****\n\r");
+
+    UART_PRINT("*****GET?*****\n\r");
+    http_get(mainLRetVal); //do we need to GET before doing anything?
+    UART_PRINT("*****GET!*****\n\r");
 
     //Start timer
     //Timer_IF_Start(get_base, TIMER_A, GET_REQUEST_CHECK_MS);
