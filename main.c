@@ -1,8 +1,5 @@
 //*****************************************************************************
-//
-//! \addtogroup ssl
-//! @{
-//
+//                 INCLUDES -- Start
 //*****************************************************************************
 #include <stdio.h>
 #include <string.h>
@@ -28,13 +25,19 @@
 #include "spi.h"
 
 //Common interface includes
-#include "pin_mux_config.h"
+#include "pinmux.h"
 #include "Adafruit_SSD1351.h"
 #include "timer_if.h"
 #include "gpio_if.h"
 #include "common.h"
 #include "uart_if.h"
+//*****************************************************************************
+//                 INCLUDES -- End
+//*****************************************************************************
 
+//*****************************************************************************
+//                 DEFINES -- Start
+//*****************************************************************************
 #define MAX_URI_SIZE 128
 #define URI_SIZE MAX_URI_SIZE + 1
 
@@ -51,29 +54,24 @@
 #define O_COLOR 0x07E0
 #define NUMBER_COLOR 0xF81F
 #define BG_COLOR 0x0
-#define NUMBER_SIZE 3
-#define O_RADIUS 15
-#define X_LENGTH 15
+#define CHAR_SIZE 3
 
 //Tic-tac-toe data
-#define PLAYER_X 1
-#define PLAYER_O 2
-#define X_SPACE 1
-#define O_SPACE 2
-#define EMPTY_SPACE 3
+#define PLAYER_X 'X'
+#define PLAYER_O 'O'
+#define EMPTY_SPACE ' '
 #define PLAYER PLAYER_X //**********CHANGE THIS FOR EACH BOARD**********//
+#define PLAYER_COLOR X_COLOR //**********CHANGE THIS FOR EACH BOARD**********//
 
 //Times are in ms
 #define SIGNAL_LENGTH_MS 26
-#define USER_DELAY_TIMEOUT_MS 1000
+#define GET_REQUEST_CHECK_MS 5000
 
 //Time is in ticks
 #define DOUBLE_SEND_THRESHHOLD_TK 64000000
-#define USER_DELAY_TIMEOUT_TK 80000000
+#define GET_REQUEST_CHECK_TK 400000000
 
 //Key defines
-#define MUTE 127
-#define LAST 128
 #define UNKNOWN 63 //maps to ?
 #define NO_KEY 46 //maps to .
 
@@ -89,11 +87,11 @@
 #define SL_SSL_CLIENT  "/cert/client"
 
 //NEED TO UPDATE THIS FOR IT TO WORK!
-#define DATE                29    /* Current Date */
-#define MONTH               5     /* Month 1-12 */
+#define DATE                3    /* Current Date */
+#define MONTH               6     /* Month 1-12 */
 #define YEAR                2018  /* Current year */
-#define HOUR                16    /* Time - hours */
-#define MINUTE              33    /* Time - minutes */
+#define HOUR                20    /* Time - hours */
+#define MINUTE              20    /* Time - minutes */
 #define SECOND              0     /* Time - seconds */
 
 //RESTful API
@@ -104,12 +102,14 @@
 #define CTHEADER "Content-Type: application/json; charset=utf-8\r\n"
 #define CLHEADER1 "Content-Length: "
 #define CLHEADER2 "\r\n\r\n"
+#define DATA_TEST "{\"state\": {\r\n\"desired\" : {\r\n\"var\" : \"Anyone out there?\"\r\n}}}\r\n\r\n"
+//*****************************************************************************
+//                 DEFINES -- End
+//*****************************************************************************
 
-//#define DATA1 "{\"state\": {\r\n\"desired\" : {\r\n\"color\" : \"green\"\r\n}}}\r\n\r\n"
-static char DATA1[300];
-//DATA1 = "{\"state\": {\r\n\"desired\" : {\r\n\"default\" : \"Hi There!\"\r\n}}}\r\n\r\n"
-
-
+//*****************************************************************************
+//                 DATA STRUCTURES -- Start
+//*****************************************************************************
 // Application specific status/error codes
 typedef enum{
     // Choosing -0x7D0 to avoid overlap w/ host-driver's error codes
@@ -134,7 +134,9 @@ typedef struct
    unsigned long tm_year_day; //not required
    unsigned long reserved[3];
 }SlDateTime;
-
+//*****************************************************************************
+//                 DATA STRUCTURES -- End
+//*****************************************************************************
 
 //*****************************************************************************
 //                 GLOBAL VARIABLES -- Start
@@ -154,25 +156,61 @@ extern uVectorEntry __vector_table;
 #endif
 
 extern void (* const g_pfnVectors[])(void);
-
-static long lRetVal = -1;
 static volatile unsigned long edge_count;
 static volatile unsigned long signal_base;
-static volatile unsigned long wait_base;
+static volatile unsigned long get_base;
 static volatile unsigned int timer_recordings[128];
-static volatile unsigned char must_be_new_letter;
-static volatile unsigned char previous_key;
-static volatile unsigned char num_repeats;
-static volatile int char_position;
-static volatile int drawNow;
-static char sender_message[200];
-static char receiver_message[200];
-static volatile int current_player;
-static volatile int current_board[9];
+//static volatile unsigned char must_be_new_letter;
+//static volatile unsigned char previous_key;
+//static volatile unsigned char num_repeats;
+//static volatile int char_position;
+//static volatile int drawNow;
+//static char sender_message[200];
+//static char receiver_message[200];
+static volatile char current_player;
+static volatile char current_board[9];
+static volatile char winning_player;
+static char DATA1[300];
+static char DATA2[300];
+long mainLRetVal;
 
 //*****************************************************************************
-//                 GLOBAL VARIABLES -- End: df
+//                 GLOBAL VARIABLES -- End
 //*****************************************************************************
+
+//****************************************************************************
+//                      LOCAL FUNCTION PROTOTYPES - Start
+//****************************************************************************
+static long WlanConnect();
+static int set_time();
+static long InitializeAppVariables();
+static int tls_connect();
+static int connectToAccessPoint();
+static int http_post(int);
+static int http_get(int);
+
+static void BoardInit(void);
+static void SPIInit(void);
+static void OLEDInit(void);
+static void GPIOInit(void);
+static void TimersInit(void);
+static void TicTacToeInit(void);
+static void DrawPlayer(unsigned int pos);
+static void DrawNumber(unsigned int pos);
+static void ClearSpace(unsigned int pos);
+static void RisingEdgeHandler(void);
+static void FallingEdgeHandler(void);
+static void StartTimerHandler(void);
+static void OnTimerEndHandler(void);
+static void OnGetEndHandler(void);
+//static void UARTReceiveHandler(void);
+static unsigned char DetermineNumber(int input);
+static void SendToAWS(void);
+static void GetBoardString(char *buf);
+//****************************************************************************
+//                      LOCAL FUNCTION PROTOTYPES - End
+//****************************************************************************
+
 //*****************************************************************************
 //                 PIN SETUP -- Start
 //*****************************************************************************
@@ -183,42 +221,35 @@ typedef struct PinSetting {
 
 static PinSetting receiver_rising = { .port = GPIOA0_BASE, .pin = 0x1};
 static PinSetting receiver_falling = { .port = GPIOA3_BASE, .pin = 0x40};
-
-//****************************************************************************
-//                      LOCAL FUNCTION PROTOTYPES
-//****************************************************************************
-static long WlanConnect();
-static int set_time();
-static long InitializeAppVariables();
-static int tls_connect();
-static int connectToAccessPoint();
-static int http_post(int);
-static void BoardInit(void);
-static void SPIInit(void);
-static void OLEDInit(void);
-static void GPIOInit(void);
-static void TimersInit(void);
-static void UARTInit(void);
-static void TicTacToeInit(void);
-static void DrawX(unsigned int pos);
-static void DrawO(unsigned int pos);
-static void DrawNumber(unsigned int pos);
-static void ClearNumber(unsigned int pos);
-static void RisingEdgeHandler(void);
-static void FallingEdgeHandler(void);
-static void StartTimerHandler(void);
-static void OnTimerEndHandler(void);
-static void OnWaitEndHandler(void);
-static void UARTReceiveHandler(void);
-static unsigned char DetermineNumber(int input);
-static void SendOverUART(void);
-
 //*****************************************************************************
-// SimpleLink Asynchronous Event Handlers -- Start
+//                 PIN SETUP -- End
 //*****************************************************************************
+
 //*****************************************************************************
 //                 INITIALIZERS -- Start
 //*****************************************************************************
+static void BoardInit(void) {
+/* In case of TI-RTOS vector table is initialize by OS itself */
+#ifndef USE_TIRTOS
+  //
+  // Set vector table base
+  //
+#if defined(ccs)
+    MAP_IntVTableBaseSet((unsigned long)&g_pfnVectors[0]);
+#endif
+#if defined(ewarm)
+    MAP_IntVTableBaseSet((unsigned long)&__vector_table);
+#endif
+#endif
+    //
+    // Enable Processor
+    //
+    MAP_IntMasterEnable();
+    MAP_IntEnable(FAULT_SYSTICK);
+
+    PRCMCC3200MCUInit();
+}
+
 //Initilializes SPI
 static void SPIInit(void)
 {
@@ -246,8 +277,9 @@ static void SPIInit(void)
 
 static void OLEDInit(void)
 {
-    //Initializes the OLED screen to a tic-tac-toe board
-    fillScreen(0);
+    //Initializes the OLED screen to a tic-tac-toe board with numbers
+    Adafruit_Init();
+    fillScreen(BG_COLOR);
     drawLine(0, 41, 127, 41, LINE_COLOR);
     drawLine(0, 83, 127, 83, LINE_COLOR);
     drawLine(41, 0, 41, 127, LINE_COLOR);
@@ -282,16 +314,17 @@ static void GPIOInit(void)
 static void TimersInit(void)
 {
     signal_base = TIMERA0_BASE;
-    wait_base = TIMERA1_BASE;
+    get_base = TIMERA1_BASE;
     Timer_IF_Init(PRCM_TIMERA0, signal_base, TIMER_CFG_ONE_SHOT, TIMER_A, 0);
-    Timer_IF_Init(PRCM_TIMERA1, wait_base, TIMER_CFG_ONE_SHOT, TIMER_A, 0);
+    Timer_IF_Init(PRCM_TIMERA1, get_base, TIMER_CFG_ONE_SHOT, TIMER_A, 0);
     Timer_IF_IntSetup(signal_base, TIMER_A, OnTimerEndHandler);
-    Timer_IF_IntSetup(wait_base, TIMER_A, OnWaitEndHandler);
+    Timer_IF_IntSetup(get_base, TIMER_A, OnGetEndHandler);
     Timer_IF_InterruptClear(signal_base);
-    Timer_IF_InterruptClear(wait_base);
+    Timer_IF_InterruptClear(get_base);
 }
 
 //Function to initialize UART
+/*
 static void UARTInit(void)
 {
     MAP_UARTConfigSetExpClk(UARTA1_BASE,
@@ -309,11 +342,13 @@ static void UARTInit(void)
     //Enable communication
     UARTEnable(UARTA1_BASE);
 }
+*/
 
 //Set up an empty ttt board and set X to go first
 static void TicTacToeInit(void)
 {
     current_player = PLAYER_X;
+    winning_player = EMPTY_SPACE;
     int i;
     for(i = 0; i < 9; ++i)
     {
@@ -363,22 +398,10 @@ static void StartTimerHandler(void)
     //Reset edge count
     edge_count = 0;
 
-    //Check wait timer
-    Timer_IF_Stop(wait_base, TIMER_A);
-    unsigned int waitTime = MAP_TimerValueGet(wait_base, TIMER_A);
-
-    //Check if not a double send, and get ready to parse valid signal
-    if(waitTime < DOUBLE_SEND_THRESHHOLD_TK || waitTime == USER_DELAY_TIMEOUT_TK)
-    {
-        //Enable rising edge interrupt handler, re-map falling edge handler, and start timer
-        MAP_GPIOIntEnable(receiver_rising.port, receiver_rising.pin);
-        MAP_GPIOIntRegister(receiver_falling.port, FallingEdgeHandler);
-        Timer_IF_Start(signal_base, TIMER_A, SIGNAL_LENGTH_MS);
-    }
-
-    //Restart wait timer
-    Timer_IF_InterruptClear(wait_base);
-    Timer_IF_Start(wait_base, TIMER_A, USER_DELAY_TIMEOUT_MS);
+    //Enable rising edge interrupt handler, re-map falling edge handler, and start timer
+    MAP_GPIOIntEnable(receiver_rising.port, receiver_rising.pin);
+    MAP_GPIOIntRegister(receiver_falling.port, FallingEdgeHandler);
+    Timer_IF_Start(signal_base, TIMER_A, SIGNAL_LENGTH_MS);
 }
 
 //Called after the signal timer has timed out, meaning we've (hopefully) read a valid signal
@@ -387,9 +410,6 @@ static void OnTimerEndHandler(void)
     // Clear the signal timer interrupt and stop it
     Timer_IF_InterruptClear(signal_base);
     Timer_IF_Stop(signal_base, TIMER_A);
-
-    //Save must_be_new_letter in case wait timer later changes it
-    unsigned char is_new_letter = must_be_new_letter;
 
     //Disable handlers while we parse input
     MAP_GPIOIntDisable(receiver_falling.port, receiver_falling.pin);
@@ -447,24 +467,24 @@ static void OnTimerEndHandler(void)
         else //numeric key
         {
             int pos = now - '0'; //convert to integer
-            if(current_player == PLAYER && current_board[pos - 1] == EMPTY_SPACE)
+            if(current_player == PLAYER && current_board[pos - 1] == EMPTY_SPACE) //is valid move
             {
+                DrawPlayer(pos);
                 if(current_player == PLAYER_X)
                 {
-                    DrawX(pos);
                     current_player = PLAYER_O;
                 }
                 else
                 {
-                    DrawO(pos);
                     current_player = PLAYER_X;
                 }
-            }
-        } //number key
+                SendToAWS();
+            } //valid move
+        } //numeric key
 
         //reset some variables
-        previous_key = now;
-        must_be_new_letter = 0;
+//        previous_key = now;
+//        must_be_new_letter = 0;
     } //valid signal
 
     //Re-enable falling edge and re-map to trigger on next timer start
@@ -472,16 +492,22 @@ static void OnTimerEndHandler(void)
     MAP_GPIOIntEnable(receiver_falling.port, receiver_falling.pin);
 }
 
-//Called after the user hasn't pressed any keys after USER_DELAY time
-static void OnWaitEndHandler(void)
+//Update the board state by reading from AWS
+static void OnGetEndHandler(void)
 {
     //Clear wait timer interrupt
-    Timer_IF_InterruptClear(wait_base);
+    Timer_IF_InterruptClear(get_base);
 
-    //Update key status
-    must_be_new_letter = 1;
+    UART_PRINT("In OnGetEndHandler\n\r");
+
+    //Get data from AWS
+    http_get(mainLRetVal);
+
+    //Restart timer
+    Timer_IF_Start(get_base, TIMER_A, GET_REQUEST_CHECK_MS);
 }
 
+/*
 //called when receiving a message
 static void UARTReceiveHandler(void)
 {
@@ -508,6 +534,7 @@ static void UARTReceiveHandler(void)
       }
     }
 }
+*/
 //*****************************************************************************
 //                 HANDLERS -- End
 //*****************************************************************************
@@ -515,23 +542,25 @@ static void UARTReceiveHandler(void)
 //*****************************************************************************
 //                 UART -- Start
 //*****************************************************************************
-//called when pressing the LAST key
-static void SendOverUART(void)
+static void SendToAWS(void)
 {
-//    int i = 0;
-    int len = strlen(sender_message);
-//    sender_message[len - 1];
-    strcat(DATA1, "{\"state\": {\r\n\"desired\": {\r\n\"default\": \"");
-    strcat(DATA1, sender_message);
+    //Pause GET timer
+    MAP_TimerDisable(get_base,TIMER_A);
+
+    char buf[12]; //9 spots for board, 1 for win, 1 for cur, 1 for \0
+    GetBoardString(&buf[0]);
+    strcat(DATA1, "{\"state\": {\r\n\"desired\" : {\r\n\"var\": \"");
+    strcat(DATA1, buf);
     strcat(DATA1, "\"\r\n}}}\r\n\r\n");
 
     //for the length of Sender_message, put each character in the array into the SPI Queue
     //for the receiver to get later
-    http_post(lRetVal);
+    http_post(mainLRetVal);
     //Reset sender
     DATA1[0] = '\0';
-    sender_message[0] = '\0';
-    char_position = 0;
+
+    //Resume GET timer
+    MAP_TimerEnable(get_base,TIMER_A);
 }
 //*****************************************************************************
 //                 UART -- End
@@ -542,33 +571,23 @@ static void SendOverUART(void)
 //*****************************************************************************
 
 //Each space is 41px by 41px
-static void DrawX(unsigned int pos)
+static void DrawPlayer(unsigned int pos)
 {
-    ClearNumber(pos);
-    int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + (SQUARE_SIZE + 1)/2;
-    int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + (SQUARE_SIZE + 1)/2;
-    drawLine(x - X_LENGTH, y - X_LENGTH, x + X_LENGTH, y + X_LENGTH, X_COLOR);
-    drawLine(x - X_LENGTH, y + X_LENGTH, x + X_LENGTH, y - X_LENGTH, X_COLOR);
-    current_board[pos - 1] = X_SPACE;
-}
-
-static void DrawO(unsigned int pos)
-{
-    ClearNumber(pos);
-    int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + (SQUARE_SIZE + 1)/2;
-    int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + (SQUARE_SIZE + 1)/2;
-    drawCircle(x, y, O_RADIUS, O_COLOR);
-    current_board[pos - 1] = O_SPACE;
+    ClearSpace(pos);
+    int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 7;
+    int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 7;
+    drawChar(x, y, PLAYER, PLAYER_COLOR, BG_COLOR, CHAR_SIZE);
+    current_board[pos - 1] = PLAYER;
 }
 
 static void DrawNumber(unsigned int pos)
 {
     int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 7;
     int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 7;
-    drawChar(x, y, '0'+pos, NUMBER_COLOR, BG_COLOR, NUMBER_SIZE);
+    drawChar(x, y, '0'+pos, NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
 }
 
-static void ClearNumber(unsigned int pos)
+static void ClearSpace(unsigned int pos)
 {
     int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 1;
     int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 1;
@@ -606,13 +625,21 @@ static unsigned char DetermineNumber(int input)
         return '8';
     case 220: //9
         return '9';
-    case 196:
-        return MUTE;
-    case 130:
-        return LAST;
     }
 
     return UNKNOWN;
+}
+
+static void GetBoardString(char *buf)
+{
+    int i;
+    for(i = 0; i < 9; ++i)
+    {
+        buf[i] = current_board[i];
+    }
+    buf[9] = winning_player;
+    buf[10] = current_player;
+    buf[11] = '\0';
 }
 
 //*****************************************************************************
@@ -822,12 +849,6 @@ void SimpleLinkSockEventHandler(SlSockEvent_t *pSock) {
     }
 }
 
-
-//*****************************************************************************
-// SimpleLink Asynchronous Event Handlers -- End breadcrumb: s18_df
-//*****************************************************************************
-
-
 //*****************************************************************************
 //
 //! \brief This function initializes the application variables
@@ -987,38 +1008,6 @@ static long ConfigureSimpleLinkToDefaultState() {
     return lRetVal; // Success
 }
 
-
-//*****************************************************************************
-//
-//! Board Initialization & Configuration
-//!
-//! \param  None
-//!
-//! \return None
-//
-//*****************************************************************************
-static void BoardInit(void) {
-/* In case of TI-RTOS vector table is initialize by OS itself */
-#ifndef USE_TIRTOS
-  //
-  // Set vector table base
-  //
-#if defined(ccs)
-    MAP_IntVTableBaseSet((unsigned long)&g_pfnVectors[0]);
-#endif
-#if defined(ewarm)
-    MAP_IntVTableBaseSet((unsigned long)&__vector_table);
-#endif
-#endif
-    //
-    // Enable Processor
-    //
-    MAP_IntMasterEnable();
-    MAP_IntEnable(FAULT_SYSTICK);
-
-    PRCMCC3200MCUInit();
-
-}
 
 
 //****************************************************************************
@@ -1289,27 +1278,26 @@ int connectToAccessPoint() {
 //*****************************************************************************
 
 void main() {
-    //
+    //What the hell am I doing
+    char *addrToEdit = (char*)0xE000E008;
+    *addrToEdit = (*addrToEdit | 2);
+
+    //Set up global variables
+    edge_count = 0;
+    DATA1[0] = '\0';
+    DATA2[0] = '\0';
+
     // Initialize board configuration
-    //
     BoardInit();
     PinMuxConfig();
     SPIInit();
     OLEDInit();
     GPIOInit();
     TimersInit();
-//    UARTInit();
+    //UARTInit();
     TicTacToeInit();
 
-    //Set up global variables
-        edge_count = 0;
-        must_be_new_letter = 1;
-        previous_key = NO_KEY;
-        num_repeats = 0;
-        char_position = 0;
-        sender_message[0] = '\0';
-        receiver_message[0] = '\0';
-        drawNow = 0;
+    long lRetVal = -1;
 
     InitTerm();
     ClearTerm();
@@ -1328,14 +1316,20 @@ void main() {
     if(lRetVal < 0) {
         ERR_PRINT(lRetVal);
     }
-    //Start wait timer
-    Timer_IF_Start(wait_base, TIMER_A, USER_DELAY_TIMEOUT_MS);
-    while(1){
 
+    mainLRetVal = lRetVal;
+
+    //Update shadow to clean board
+    //SendToAWS();
+    //http_get(mainLRetVal);
+    //UART_PRINT("*****DONE*****\n\r");
+
+    //Start timer
+    //Timer_IF_Start(get_base, TIMER_A, GET_REQUEST_CHECK_MS);
+    while(1){
     }
 
-    http_post(lRetVal);
-
+    //http_post(lRetVal);
     sl_Stop(SL_STOP_TIMEOUT);
     LOOP_FOREVER();
 }
@@ -1410,11 +1404,9 @@ static int http_post(int iTLSSockID){
     return 0;
 }
 
-
 static int http_get(int iTLSSockID){
     char acSendBuff[512];
     char acRecvbuff[1460];
-    char cCLLength[200];
     char* pcBufHeaders;
     int lRetVal = 0;
 
@@ -1427,7 +1419,6 @@ static int http_get(int iTLSSockID){
     pcBufHeaders += strlen(CHEADER);
     strcpy(pcBufHeaders, "\r\n\r\n");
 
-
     int testDataLength = strlen(pcBufHeaders);
 
     UART_PRINT(acSendBuff);
@@ -1438,7 +1429,7 @@ static int http_get(int iTLSSockID){
     //
     lRetVal = sl_Send(iTLSSockID, acSendBuff, strlen(acSendBuff), 0);
     if(lRetVal < 0) {
-        UART_PRINT("POST failed. Error Number: %i\n\r",lRetVal);
+        UART_PRINT("GET failed. Error Number: %i\n\r",lRetVal);
         sl_Close(iTLSSockID);
         GPIO_IF_LedOn(MCU_RED_LED_GPIO);
         return lRetVal;
@@ -1455,6 +1446,8 @@ static int http_get(int iTLSSockID){
         UART_PRINT(acRecvbuff);
         UART_PRINT("\n\r\n\r");
     }
+
+    strcpy(&DATA2[0], acRecvbuff);
 
     return 0;
 }
