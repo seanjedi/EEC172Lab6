@@ -60,6 +60,9 @@
 #define PLAYER_X 'X'
 #define PLAYER_O 'O'
 #define EMPTY_SPACE ' '
+#define NO_WIN 0
+#define WIN 1
+#define DRAW 2
 
 //Times are in ms
 #define SIGNAL_LENGTH_MS 26
@@ -209,12 +212,12 @@ static void SW2Handler(void);
 static void SW3Handler(void);
 //static void UARTReceiveHandler(void);
 static unsigned char DetermineNumber(int input);
-static void SendToAWS(void);
+static void SendToAWS(int result);
 static void GetBoardString(char *buf);
 static void ConnectToAWS(void);
 static int CheckForWin(void);
-static void EndGame(void);
-static void DrawEndGame(void);
+static void EndGame(int result);
+static void DrawEndGame(int result);
 //****************************************************************************
 //                      LOCAL FUNCTION PROTOTYPES - End
 //****************************************************************************
@@ -369,7 +372,7 @@ static void UARTInit(void)
 //Set up an empty ttt board and set X to go first
 static void TicTacToeInit(void)
 {
-    current_player = PLAYER_O;
+    current_player = PLAYER_X;
     winning_player = EMPTY_SPACE;
     selected_space = 1;
     int i;
@@ -428,9 +431,10 @@ static void SW3Handler(void)
         {
             DrawX(selected_space);
             current_board[selected_space - 1] = PLAYER_X;
-            if(CheckForWin())
+            int result = CheckForWin();
+            if(result != NO_WIN)
             {
-                EndGame();
+                EndGame(result);
             }
             current_player = PLAYER_O;
         }
@@ -438,9 +442,10 @@ static void SW3Handler(void)
         {
             DrawO(selected_space);
             current_board[selected_space - 1] = PLAYER_O;
-            if(CheckForWin())
+            int result = CheckForWin();
+            if(result != NO_WIN)
             {
-                EndGame();
+                EndGame(result);
             }
             current_player = PLAYER_X;
         }
@@ -631,7 +636,7 @@ static void UARTReceiveHandler(void)
 //*****************************************************************************
 //                 UART -- Start
 //*****************************************************************************
-static void SendToAWS(void)
+static void SendToAWS(int result)
 {
     //Pause GET timer
 //    MAP_TimerDisable(get_base,TIMER_A);
@@ -644,10 +649,12 @@ static void SendToAWS(void)
 
     DATA1[0] = '\0';
     strcat(DATA1, "{\"state\": {\r\n\"desired\" : {\r\n\"default\": \"Congrats to player ");
-    if(current_player == PLAYER_X)
+    if(result == WIN && current_player == PLAYER_X)
         strcat(DATA1, "X");
-    else
+    else if(result == WIN && current_player == PLAYER_O)
         strcat(DATA1, "O");
+    else
+        strcat(DATA1, "NOBODY");
     strcat(DATA1, "!!\"\r\n}}}\r\n\r\n");
 
     //for the length of Sender_message, put each character in the array into the SPI Queue
@@ -670,20 +677,16 @@ static void SendToAWS(void)
 //Each space is 41px by 41px
 static void DrawX(unsigned int pos)
 {
-    ClearSpace(pos);
     int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 7;
     int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 7;
     drawChar(x, y, PLAYER_X, X_COLOR, BG_COLOR, CHAR_SIZE);
-    SelectSpace(pos);
 }
 
 static void DrawO(unsigned int pos)
 {
-    ClearSpace(pos);
     int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 7;
     int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 7;
     drawChar(x, y, PLAYER_O, O_COLOR, BG_COLOR, CHAR_SIZE);
-    SelectSpace(pos);
 }
 
 static void DrawNumber(unsigned int pos)
@@ -702,9 +705,9 @@ static void SelectSpace(unsigned int pos)
 
 static void DeselectSpace(unsigned int pos)
 {
-    int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 1;
-    int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 1;
-    drawRect(x, y, SQUARE_SIZE - 1, SQUARE_SIZE - 1, BG_COLOR);
+    int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 3;
+    int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 3;
+    drawRect(x, y, SQUARE_SIZE - 6, SQUARE_SIZE - 6, BG_COLOR);
 }
 
 static void ClearSpace(unsigned int pos)
@@ -714,17 +717,27 @@ static void ClearSpace(unsigned int pos)
     fillRect(x, y, SQUARE_SIZE - 1, SQUARE_SIZE - 1, BG_COLOR);
 }
 
-static void DrawEndGame(void)
+static void DrawEndGame(int result)
 {
-    fillScreen(BG_COLOR);
-    if(current_player == PLAYER_X)
-        drawChar(10, 10, PLAYER_X, X_COLOR, BG_COLOR, CHAR_SIZE*2);
+    if(result == WIN)
+    {
+        fillScreen(BG_COLOR);
+        if(current_player == PLAYER_X)
+            drawChar(10, 10, PLAYER_X, X_COLOR, BG_COLOR, CHAR_SIZE*2);
+        else
+            drawChar(10, 10, PLAYER_O, O_COLOR, BG_COLOR, CHAR_SIZE*2);
+        drawChar(40, 70, 'W', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+        drawChar(60, 70, 'I', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+        drawChar(80, 70, 'N', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+        drawChar(100, 70, 'S', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+    }
     else
-        drawChar(10, 10, PLAYER_O, O_COLOR, BG_COLOR, CHAR_SIZE*2);
-    drawChar(40, 70, 'W', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
-    drawChar(60, 70, 'I', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
-    drawChar(80, 70, 'N', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
-    drawChar(100, 70, 'S', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+    {
+        drawChar(40, 70, 'D', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+        drawChar(60, 70, 'R', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+        drawChar(80, 70, 'A', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+        drawChar(100, 70, 'W', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+    }
 }
 //*****************************************************************************
 //                 DRAWING -- End
@@ -777,37 +790,34 @@ static void GetBoardString(char *buf)
 
 static int CheckForWin(void)
 {
-    //First check X
-    unsigned int x = 0;
+    //First check for win
+    if(
+            ((current_board[0] != EMPTY_SPACE) && (current_board[0] == current_board[1]) && (current_board[1] == current_board[2])) ||
+            ((current_board[3] != EMPTY_SPACE) && (current_board[3] == current_board[4]) && (current_board[4] == current_board[5])) ||
+            ((current_board[6] != EMPTY_SPACE) && (current_board[6] == current_board[7]) && (current_board[7] == current_board[8])) ||
+            ((current_board[0] != EMPTY_SPACE) && (current_board[0] == current_board[3]) && (current_board[3] == current_board[6])) ||
+            ((current_board[1] != EMPTY_SPACE) && (current_board[1] == current_board[4]) && (current_board[4] == current_board[7])) ||
+            ((current_board[2] != EMPTY_SPACE) && (current_board[2] == current_board[5]) && (current_board[5] == current_board[8])) ||
+            ((current_board[0] != EMPTY_SPACE) && (current_board[0] == current_board[4]) && (current_board[4] == current_board[8])) ||
+            ((current_board[2] != EMPTY_SPACE) && (current_board[2] == current_board[4]) && (current_board[4] == current_board[6]))
+      )
+        return WIN;
+
+    //Then check for draw
     int i;
     for(i = 0; i < 9; ++i)
     {
-        if(current_board[i] == PLAYER_X)
-            x = (x | 1);
-        x = (x << 1);
+        if(current_board[i] == EMPTY_SPACE)
+            return NO_WIN;
     }
-    if(x == 14 || x == 112 || x == 896 || x == 146 || x == 292 || x == 584 || x == 546 || x == 168)
-        return 1;
-
-    //Now check O
-    unsigned int o = 0;
-    for(i = 0; i < 9; ++i)
-    {
-        if(current_board[i] == PLAYER_O)
-            o = (o | 1);
-        o = (o << 1);
-    }
-    if(o == 14 || o == 112 || o == 896 || o == 146 || o == 292 || o == 584 || o == 546 || o == 168)
-        return 1;
-
-    return 0;
+    return DRAW;
 }
 
-static void EndGame(void)
+static void EndGame(int result)
 {
-    DrawEndGame();
+    DrawEndGame(result);
     //ConnectToAWS();
-    SendToAWS();
+    SendToAWS(result);
     while(1)
     {
         // block
