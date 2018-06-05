@@ -60,8 +60,6 @@
 #define PLAYER_X 'X'
 #define PLAYER_O 'O'
 #define EMPTY_SPACE ' '
-#define PLAYER PLAYER_X //**********CHANGE THIS FOR EACH BOARD**********//
-#define PLAYER_COLOR X_COLOR //**********CHANGE THIS FOR EACH BOARD**********//
 
 //Times are in ms
 #define SIGNAL_LENGTH_MS 26
@@ -87,11 +85,11 @@
 #define SL_SSL_CLIENT  "/cert/client"
 
 //NEED TO UPDATE THIS FOR IT TO WORK!
-#define DATE                4    /* Current Date */
+#define DATE                5    /* Current Date */
 #define MONTH               6     /* Month 1-12 */
 #define YEAR                2018  /* Current year */
-#define HOUR                12    /* Time - hours */
-#define MINUTE              35    /* Time - minutes */
+#define HOUR                0    /* Time - hours */
+#define MINUTE              37    /* Time - minutes */
 #define SECOND              0     /* Time - seconds */
 
 //RESTful API
@@ -196,7 +194,8 @@ static void OLEDInit(void);
 static void GPIOInit(void);
 static void TimersInit(void);
 static void TicTacToeInit(void);
-static void DrawPlayer(unsigned int pos);
+static void DrawX(unsigned int pos);
+static void DrawO(unsigned int pos);
 static void DrawNumber(unsigned int pos);
 static void SelectSpace(unsigned int pos);
 static void DeselectSpace(unsigned int pos);
@@ -212,6 +211,10 @@ static void SW3Handler(void);
 static unsigned char DetermineNumber(int input);
 static void SendToAWS(void);
 static void GetBoardString(char *buf);
+static void ConnectToAWS(void);
+static int CheckForWin(void);
+static void EndGame(void);
+static void DrawEndGame(void);
 //****************************************************************************
 //                      LOCAL FUNCTION PROTOTYPES - End
 //****************************************************************************
@@ -292,11 +295,11 @@ static void OLEDInit(void)
     drawLine(41, 0, 41, 127, LINE_COLOR);
     drawLine(83, 0, 83, 127, LINE_COLOR);
 
-    int i;
-    for(i = 1; i <= 9; ++i)
-    {
-        DrawNumber(i);
-    }
+//    int i;
+//    for(i = 1; i <= 9; ++i)
+//    {
+//        DrawNumber(i);
+//    }
 
     SelectSpace(1);
 }
@@ -366,7 +369,7 @@ static void UARTInit(void)
 //Set up an empty ttt board and set X to go first
 static void TicTacToeInit(void)
 {
-    current_player = PLAYER_X;
+    current_player = PLAYER_O;
     winning_player = EMPTY_SPACE;
     selected_space = 1;
     int i;
@@ -374,6 +377,27 @@ static void TicTacToeInit(void)
     {
         current_board[i] = EMPTY_SPACE;
     }
+}
+
+static void ConnectToAWS(void)
+{
+    long lRetVal = -1;
+
+    //Connect the CC3200 to the local access point
+    lRetVal = connectToAccessPoint();
+    //Set time so that encryption can be used
+    lRetVal = set_time();
+    if(lRetVal < 0) {
+        UART_PRINT("Unable to set time in the device");
+        LOOP_FOREVER();
+    }
+    //Connect to the website with TLS encryption
+    lRetVal = tls_connect();
+    if(lRetVal < 0) {
+        ERR_PRINT(lRetVal);
+    }
+
+    mainLRetVal = lRetVal;
 }
 //*****************************************************************************
 //                 INITIALIZERS -- End
@@ -397,7 +421,31 @@ static void SW3Handler(void)
 {
     MAP_GPIOIntClear(sw3.port, sw3.pin);
     UART_PRINT("SW3!\n\r");
-    SendToAWS();
+
+    if(current_board[selected_space - 1] == EMPTY_SPACE) //is valid move
+    {
+        if(current_player == PLAYER_X)
+        {
+            DrawX(selected_space);
+            current_board[selected_space - 1] = PLAYER_X;
+            if(CheckForWin())
+            {
+                EndGame();
+            }
+            current_player = PLAYER_O;
+        }
+        else
+        {
+            DrawO(selected_space);
+            current_board[selected_space - 1] = PLAYER_O;
+            if(CheckForWin())
+            {
+                EndGame();
+            }
+            current_player = PLAYER_X;
+        }
+        //SendToAWS();
+    } //valid move
 }
 
 //This handler gets triggered when we have a rising edge, and records the current timer for the
@@ -505,18 +553,21 @@ static void OnTimerEndHandler(void)
         else //numeric key
         {
             int pos = now - '0'; //convert to integer
-            if(current_player == PLAYER && current_board[pos - 1] == EMPTY_SPACE) //is valid move
+            if(current_board[pos - 1] == EMPTY_SPACE) //is valid move
             {
-                DrawPlayer(pos);
                 if(current_player == PLAYER_X)
                 {
+                    DrawX(pos);
+                    current_board[pos - 1] = PLAYER_X;
                     current_player = PLAYER_O;
                 }
                 else
                 {
+                    DrawO(pos);
+                    current_board[pos - 1] = PLAYER_O;
                     current_player = PLAYER_X;
                 }
-                SendToAWS();
+                //SendToAWS();
             } //valid move
         } //numeric key
 
@@ -583,13 +634,21 @@ static void UARTReceiveHandler(void)
 static void SendToAWS(void)
 {
     //Pause GET timer
-    MAP_TimerDisable(get_base,TIMER_A);
+//    MAP_TimerDisable(get_base,TIMER_A);
 
-    char buf[12]; //9 spots for board, 1 for win, 1 for cur, 1 for \0
-    GetBoardString(&buf[0]);
-    strcat(DATA1, "{\"state\": {\r\n\"desired\" : {\r\n\"var\": \"");
-    strcat(DATA1, buf);
-    strcat(DATA1, "\"\r\n}}}\r\n\r\n");
+//    char buf[12]; //9 spots for board, 1 for win, 1 for cur, 1 for \0
+//    GetBoardString(&buf[0]);
+//    strcat(DATA1, "{\"state\": {\r\n\"desired\" : {\r\n\"var\": \"");
+//    strcat(DATA1, buf);
+//    strcat(DATA1, "\"\r\n}}}\r\n\r\n");
+
+    DATA1[0] = '\0';
+    strcat(DATA1, "{\"state\": {\r\n\"desired\" : {\r\n\"default\": \"Congrats to player ");
+    if(current_player == PLAYER_X)
+        strcat(DATA1, "X");
+    else
+        strcat(DATA1, "O");
+    strcat(DATA1, "!!\"\r\n}}}\r\n\r\n");
 
     //for the length of Sender_message, put each character in the array into the SPI Queue
     //for the receiver to get later
@@ -598,7 +657,7 @@ static void SendToAWS(void)
     DATA1[0] = '\0';
 
     //Resume GET timer
-    MAP_TimerEnable(get_base,TIMER_A);
+//    MAP_TimerEnable(get_base,TIMER_A);
 }
 //*****************************************************************************
 //                 UART -- End
@@ -609,13 +668,22 @@ static void SendToAWS(void)
 //*****************************************************************************
 
 //Each space is 41px by 41px
-static void DrawPlayer(unsigned int pos)
+static void DrawX(unsigned int pos)
 {
     ClearSpace(pos);
     int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 7;
     int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 7;
-    drawChar(x, y, PLAYER, PLAYER_COLOR, BG_COLOR, CHAR_SIZE);
-    current_board[pos - 1] = PLAYER;
+    drawChar(x, y, PLAYER_X, X_COLOR, BG_COLOR, CHAR_SIZE);
+    SelectSpace(pos);
+}
+
+static void DrawO(unsigned int pos)
+{
+    ClearSpace(pos);
+    int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 7;
+    int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 7;
+    drawChar(x, y, PLAYER_O, O_COLOR, BG_COLOR, CHAR_SIZE);
+    SelectSpace(pos);
 }
 
 static void DrawNumber(unsigned int pos)
@@ -627,9 +695,9 @@ static void DrawNumber(unsigned int pos)
 
 static void SelectSpace(unsigned int pos)
 {
-    int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 1;
-    int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 1;
-    drawRect(x, y, SQUARE_SIZE - 1, SQUARE_SIZE - 1, NUMBER_COLOR);
+    int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 3;
+    int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 3;
+    drawRect(x, y, SQUARE_SIZE - 6, SQUARE_SIZE - 6, NUMBER_COLOR);
 }
 
 static void DeselectSpace(unsigned int pos)
@@ -644,6 +712,19 @@ static void ClearSpace(unsigned int pos)
     int x = ((pos - 1) % 3) * (SQUARE_SIZE + 1) + 1;
     int y = ((pos - 1) / 3) * (SQUARE_SIZE + 1) + 1;
     fillRect(x, y, SQUARE_SIZE - 1, SQUARE_SIZE - 1, BG_COLOR);
+}
+
+static void DrawEndGame(void)
+{
+    fillScreen(BG_COLOR);
+    if(current_player == PLAYER_X)
+        drawChar(10, 10, PLAYER_X, X_COLOR, BG_COLOR, CHAR_SIZE*2);
+    else
+        drawChar(10, 10, PLAYER_O, O_COLOR, BG_COLOR, CHAR_SIZE*2);
+    drawChar(40, 70, 'W', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+    drawChar(60, 70, 'I', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+    drawChar(80, 70, 'N', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
+    drawChar(100, 70, 'S', NUMBER_COLOR, BG_COLOR, CHAR_SIZE);
 }
 //*****************************************************************************
 //                 DRAWING -- End
@@ -692,6 +773,45 @@ static void GetBoardString(char *buf)
     buf[9] = winning_player;
     buf[10] = current_player;
     buf[11] = '\0';
+}
+
+static int CheckForWin(void)
+{
+    //First check X
+    unsigned int x = 0;
+    int i;
+    for(i = 0; i < 9; ++i)
+    {
+        if(current_board[i] == PLAYER_X)
+            x = (x | 1);
+        x = (x << 1);
+    }
+    if(x == 14 || x == 112 || x == 896 || x == 146 || x == 292 || x == 584 || x == 546 || x == 168)
+        return 1;
+
+    //Now check O
+    unsigned int o = 0;
+    for(i = 0; i < 9; ++i)
+    {
+        if(current_board[i] == PLAYER_O)
+            o = (o | 1);
+        o = (o << 1);
+    }
+    if(o == 14 || o == 112 || o == 896 || o == 146 || o == 292 || o == 584 || o == 546 || o == 168)
+        return 1;
+
+    return 0;
+}
+
+static void EndGame(void)
+{
+    DrawEndGame();
+    //ConnectToAWS();
+    SendToAWS();
+    while(1)
+    {
+        // block
+    }
 }
 
 //*****************************************************************************
@@ -1319,24 +1439,6 @@ int connectToAccessPoint() {
     return 0;
 }
 
-//*****************************************************************************
-//
-//! Main 
-//!
-//! \param  none
-//!
-//! \return None
-//!
-//*****************************************************************************
-
-static void DummyFunc(void)
-{
-    SendToAWS();
-    UART_PRINT("*****POST DONE*****\n\r");
-    http_get(mainLRetVal);
-    UART_PRINT("*****GET DONE*****\n\r");
-}
-
 void main() {
     //What the hell am I doing
 //    char *addrToEdit = (char*)0xE000E008;
@@ -1353,16 +1455,16 @@ void main() {
     SPIInit();
     OLEDInit();
     GPIOInit();
-    TimersInit();
+    //TimersInit();
     //UARTInit();
     TicTacToeInit();
-
-    long lRetVal = -1;
 
     InitTerm();
     ClearTerm();
     UART_PRINT("My terminal works!\n\r");
 
+
+    long lRetVal;
     //Connect the CC3200 to the local access point
     lRetVal = connectToAccessPoint();
     //Set time so that encryption can be used
@@ -1376,17 +1478,18 @@ void main() {
     if(lRetVal < 0) {
         ERR_PRINT(lRetVal);
     }
-
     mainLRetVal = lRetVal;
+
+
 
     //Update shadow to clean board
     //SendToAWS();
     //http_get(mainLRetVal);
-    UART_PRINT("*****DONE*****\n\r");
+    //UART_PRINT("*****DONE*****\n\r");
 
-    UART_PRINT("*****GET?*****\n\r");
-    http_get(mainLRetVal); //do we need to GET before doing anything?
-    UART_PRINT("*****GET!*****\n\r");
+//    UART_PRINT("*****GET?*****\n\r");
+//    http_get(mainLRetVal); //do we need to GET before doing anything?
+//    UART_PRINT("*****GET!*****\n\r");
 
     //Start timer
     //Timer_IF_Start(get_base, TIMER_A, GET_REQUEST_CHECK_MS);
@@ -1394,8 +1497,8 @@ void main() {
     }
 
     //http_post(lRetVal);
-    sl_Stop(SL_STOP_TIMEOUT);
-    LOOP_FOREVER();
+    //sl_Stop(SL_STOP_TIMEOUT);
+    //LOOP_FOREVER();
 }
 //*****************************************************************************
 //
@@ -1467,6 +1570,7 @@ static int http_post(int iTLSSockID){
 
     return 0;
 }
+
 
 static int http_get(int iTLSSockID){
     char acSendBuff[512];
