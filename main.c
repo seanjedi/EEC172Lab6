@@ -656,6 +656,7 @@ static void SendToAWS(int result)
     else
         strcat(DATA1, "NOBODY");
     strcat(DATA1, "!!\"\r\n}}}\r\n\r\n");
+    printf(DATA1);
 
     //for the length of Sender_message, put each character in the array into the SPI Queue
     //for the receiver to get later
