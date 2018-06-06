@@ -1,3 +1,6 @@
+//Sean Malloy
+//Kiran Bhadury
+
 //*****************************************************************************
 //                 INCLUDES -- Start
 //*****************************************************************************
@@ -143,7 +146,7 @@ extern uVectorEntry __vector_table;
 
 extern void (* const g_pfnVectors[])(void);
 static volatile char current_player;
-static volatile char current_board[9];
+static volatile char current_grid[9];
 static volatile char winning_player;
 static volatile int selected_space;
 static char DATA1[300];
@@ -288,7 +291,7 @@ static void TicTacToeInit(void)
     int i;
     for(i = 0; i < 9; ++i)
     {
-        current_board[i] = EMPTY_SPACE;
+        current_grid[i] = EMPTY_SPACE;
     }
 }
 //*****************************************************************************
@@ -319,13 +322,13 @@ static void SW3Handler(void)
     MAP_GPIOIntClear(sw3.port, sw3.pin);
 
     //Check for valid move
-    if(current_board[selected_space - 1] == EMPTY_SPACE)
+    if(current_grid[selected_space - 1] == EMPTY_SPACE)
     {
         //Draw player and check for win
         if(current_player == PLAYER_X)
         {
             DrawX(selected_space);
-            current_board[selected_space - 1] = PLAYER_X;
+            current_grid[selected_space - 1] = PLAYER_X;
             int result = CheckForWin();
             if(result != NO_WIN)
             {
@@ -336,7 +339,7 @@ static void SW3Handler(void)
         else
         {
             DrawO(selected_space);
-            current_board[selected_space - 1] = PLAYER_O;
+            current_grid[selected_space - 1] = PLAYER_O;
             int result = CheckForWin();
             if(result != NO_WIN)
             {
@@ -444,14 +447,14 @@ static int CheckForWin(void)
 {
     //First check for win
     if(
-            ((current_board[0] != EMPTY_SPACE) && (current_board[0] == current_board[1]) && (current_board[1] == current_board[2])) ||
-            ((current_board[3] != EMPTY_SPACE) && (current_board[3] == current_board[4]) && (current_board[4] == current_board[5])) ||
-            ((current_board[6] != EMPTY_SPACE) && (current_board[6] == current_board[7]) && (current_board[7] == current_board[8])) ||
-            ((current_board[0] != EMPTY_SPACE) && (current_board[0] == current_board[3]) && (current_board[3] == current_board[6])) ||
-            ((current_board[1] != EMPTY_SPACE) && (current_board[1] == current_board[4]) && (current_board[4] == current_board[7])) ||
-            ((current_board[2] != EMPTY_SPACE) && (current_board[2] == current_board[5]) && (current_board[5] == current_board[8])) ||
-            ((current_board[0] != EMPTY_SPACE) && (current_board[0] == current_board[4]) && (current_board[4] == current_board[8])) ||
-            ((current_board[2] != EMPTY_SPACE) && (current_board[2] == current_board[4]) && (current_board[4] == current_board[6]))
+            ((current_grid[0] != EMPTY_SPACE) && (current_grid[0] == current_grid[1]) && (current_grid[1] == current_grid[2])) ||
+            ((current_grid[3] != EMPTY_SPACE) && (current_grid[3] == current_grid[4]) && (current_grid[4] == current_grid[5])) ||
+            ((current_grid[6] != EMPTY_SPACE) && (current_grid[6] == current_grid[7]) && (current_grid[7] == current_grid[8])) ||
+            ((current_grid[0] != EMPTY_SPACE) && (current_grid[0] == current_grid[3]) && (current_grid[3] == current_grid[6])) ||
+            ((current_grid[1] != EMPTY_SPACE) && (current_grid[1] == current_grid[4]) && (current_grid[4] == current_grid[7])) ||
+            ((current_grid[2] != EMPTY_SPACE) && (current_grid[2] == current_grid[5]) && (current_grid[5] == current_grid[8])) ||
+            ((current_grid[0] != EMPTY_SPACE) && (current_grid[0] == current_grid[4]) && (current_grid[4] == current_grid[8])) ||
+            ((current_grid[2] != EMPTY_SPACE) && (current_grid[2] == current_grid[4]) && (current_grid[4] == current_grid[6]))
       )
         return WIN;
 
@@ -459,7 +462,7 @@ static int CheckForWin(void)
     int i;
     for(i = 0; i < 9; ++i)
     {
-        if(current_board[i] == EMPTY_SPACE)
+        if(current_grid[i] == EMPTY_SPACE)
             return NO_WIN;
     }
     return DRAW;
